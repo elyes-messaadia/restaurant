@@ -1,9 +1,11 @@
 <?php
+declare(strict_types=1);
+
 // reservation.php
 include 'config.php';
 
 // Charger la liste des restaurants
-function getRestaurants($pdo) {
+function getRestaurants(PDO $pdo): array {
     $stmt = $pdo->prepare('SELECT id, name, seats FROM restaurants ORDER BY name ASC');
     $stmt->execute();
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -11,73 +13,110 @@ function getRestaurants($pdo) {
 
 $restaurants = getRestaurants($pdo);
 
+// Vérifier si des restaurants existent
+if (!$restaurants) {
+    die("Aucun restaurant trouvé dans la base de données.");
+}
+
+$errors = [];
+
 // Traiter la soumission du formulaire
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['valider'])) {
-    $restaurant_id = $_POST['restaurants'];
-    $date = $_POST['date'];
-    $couverts = $_POST['couverts'];
-    $email = $_POST['email'];
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['valider'])) {
+    $restaurant_id = filter_input(INPUT_POST, 'restaurant', FILTER_VALIDATE_INT);
+    $date = filter_input(INPUT_POST, 'date', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+    $couverts = filter_input(INPUT_POST, 'couverts', FILTER_VALIDATE_INT);
+    $email = filter_input(INPUT_POST, 'email', FILTER_VALIDATE_EMAIL);
 
     // Vérifier la date
-    $current_date = new DateTime();
-    $reservation_date = DateTime::createFromFormat('Y-m-d', $date);
-    $interval = $current_date->diff($reservation_date)->days;
+    try {
+        $current_date = new DateTimeImmutable();
+        $reservation_date = DateTimeImmutable::createFromFormat('Y-m-d', $date);
 
-    if ($reservation_date < $current_date || $interval > 60) {
-        echo "La date doit être >= à aujourd'hui et <= 2 mois à l'avance.";
-        exit;
+        if (!$reservation_date) {
+            $errors[] = "Date invalide.";
+        } else {
+            $interval = $current_date->diff($reservation_date)->days;
+
+            if ($reservation_date < $current_date) {
+                $errors[] = "Tu veux remonter dans le temps ?!";
+            } elseif ($interval > 60) {
+                $errors[] = "La date doit être <= 2 mois à l'avance.";
+            }
+        }
+    } catch (Exception $e) {
+        $errors[] = "Erreur lors de la vérification de la date.";
     }
 
     // Vérifier le nombre de couverts
-    $stmt = $pdo->prepare('SELECT seats FROM restaurants WHERE id = ?');
-    $stmt->execute([$restaurant_id]);
-    $restaurant = $stmt->fetch(PDO::FETCH_ASSOC);
-    var_dump($restaurant_id);
-    if ($couverts < 1 || $couverts > $restaurant['seats']) {
-        echo "Le nombre de couverts doit être >= 1 et <= au nombre de couverts du restaurant sélectionné.";
-        exit;
+    if ($restaurant_id && $couverts) {
+        if ($couverts > 20) {
+            $errors[] = "Hey doucement mon gourmand ! On ne peut pas réserver plus de 20 couverts !";
+        } else {
+            $stmt = $pdo->prepare('SELECT seats FROM restaurants WHERE id = ?');
+            $stmt->execute([$restaurant_id]);
+            $restaurant = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$restaurant) {
+                $errors[] = "Restaurant non trouvé.";
+            } elseif ($couverts < 1 || $couverts > $restaurant['seats']) {
+                $errors[] = "Le nombre de couverts doit être >= 1 et <= au nombre de couverts du restaurant sélectionné.";
+            }
+        }
+    } else {
+        $errors[] = "Sélection de restaurant ou nombre de couverts invalide.";
     }
 
     // Vérifier l'adresse email
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL) || !preg_match('/@(.*?)(\.fr|\.com)$/', $email)) {
-        echo "Adresse email invalide.";
-        exit;
+    if (!$email) {
+        $errors[] = "Adresse email invalide.";
+    } elseif (strpos($email, ' ') !== false) {
+        $errors[] = "L'adresse email ne doit pas contenir d'espaces.";
     }
 
     // Vérifier la disponibilité des places à la date sélectionnée
-    $stmt = $pdo->prepare('SELECT SUM(couverts) as total FROM reservations WHERE restaurant_id = ? AND date = ?');
-    $stmt->execute([$restaurant_id, $date]);
-    $total = $stmt->fetchColumn();
+    if (empty($errors)) {
+        $stmt = $pdo->prepare('SELECT SUM(couverts) as total FROM reservations WHERE restaurant_id = ? AND date = ?');
+        $stmt->execute([$restaurant_id, $date]);
+        $total = $stmt->fetchColumn();
 
-    if ($total + $couverts > $restaurant['seats']) {
-        echo "Désolé pas de place disponible pour cette date.";
-        exit;
+        if ($total + $couverts > $restaurant['seats']) {
+            $errors[] = "Désolé, pas de place disponible pour cette date.";
+        }
     }
 
     // Insérer la réservation dans la base de données
-    $stmt = $pdo->prepare('INSERT INTO reservations (restaurant_id, date, couverts, email) VALUES (?, ?, ?, ?)');
-    $stmt->execute([$restaurant_id, $date, $couverts, $email]);
+    if (empty($errors)) {
+        $stmt = $pdo->prepare('INSERT INTO reservations (restaurant_id, date, couverts, email) VALUES (?, ?, ?, ?)');
+        $stmt->execute([$restaurant_id, $date, $couverts, $email]);
 
-    echo "Merci, votre réservation a bien été prise en compte";
-    // Retourner à la liste des restaurants
-    header('Location: reservations_list.php');
-    exit;
+        echo "<p>Merci, votre réservation a bien été prise en compte.</p>";
+        header('Location: reservations_list.php');
+        exit;
+    }
 }
 ?>
 
 <!DOCTYPE html>
 <html lang="fr">
+<link rel="stylesheet" href="index.css">
 <head>
     <meta charset="UTF-8">
     <title>Réserver une table au restaurant</title>
 </head>
 <body>
     <h1>Réserver une table au restaurant</h1>
+    <?php if (!empty($errors)): ?>
+        <ul>
+            <?php foreach ($errors as $error): ?>
+                <li><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></li>
+            <?php endforeach; ?>
+        </ul>
+    <?php endif; ?>
     <form method="post" action="reservation.php">
         <label for="restaurant">Restaurant:</label>
-        <select name="restaurant" id="restaurant">
+        <select name="restaurant" id="restaurant" required>
             <?php foreach ($restaurants as $restaurant): ?>
-                <option value="<?= $restaurant['id'] ?>"><?= htmlspecialchars($restaurant['name']) ?></option>
+                <option value="<?= htmlspecialchars((string)$restaurant['id'], ENT_QUOTES, 'UTF-8') ?>"><?= htmlspecialchars($restaurant['name'], ENT_QUOTES, 'UTF-8') ?></option>
             <?php endforeach; ?>
         </select>
         <br>

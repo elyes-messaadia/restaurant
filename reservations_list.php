@@ -1,8 +1,10 @@
 <?php
+declare(strict_types=1);
+
 include 'config.php';
 
 // Charger la liste des réservations
-function getReservations($pdo) {
+function getReservations(PDO $pdo): array {
     $stmt = $pdo->prepare('SELECT r.id, r.date, r.couverts, r.email, res.name as restaurant_name FROM reservations r JOIN restaurants res ON r.restaurant_id = res.id ORDER BY r.date ASC');
     $stmt->execute();
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -13,6 +15,7 @@ $reservations = getReservations($pdo);
 
 <!DOCTYPE html>
 <html lang="fr">
+<link rel="stylesheet" href="index.css">
 <head>
     <meta charset="UTF-8">
     <title>Liste des Réservations</title>
@@ -29,13 +32,13 @@ $reservations = getReservations($pdo);
         </tr>
         <?php foreach ($reservations as $reservation): ?>
         <tr>
-            <td><?= htmlspecialchars($reservation['restaurant_name']) ?></td>
-            <td><?= htmlspecialchars($reservation['date']) ?></td>
-            <td><?= htmlspecialchars($reservation['couverts']) ?></td>
-            <td><?= htmlspecialchars($reservation['email']) ?></td>
+            <td><?= htmlspecialchars($reservation['restaurant_name'], ENT_QUOTES, 'UTF-8') ?></td>
+            <td><?= htmlspecialchars($reservation['date'], ENT_QUOTES, 'UTF-8') ?></td>
+            <td><?= htmlspecialchars((string)$reservation['couverts'], ENT_QUOTES, 'UTF-8') ?></td>
+            <td><?= htmlspecialchars($reservation['email'], ENT_QUOTES, 'UTF-8') ?></td>
             <td>
-                <a href="edit_reservation.php?id=<?= $reservation['id'] ?>">Modifier</a>
-                <a href="delete_reservation.php?id=<?= $reservation['id'] ?>" onclick="return confirm('Êtes-vous sûr de vouloir annuler cette réservation ?');">Annuler</a>
+                <a href="edit_reservation.php?id=<?= urlencode((string)$reservation['id']) ?>">Modifier</a>
+                <a href="delete_reservation.php?id=<?= urlencode((string)$reservation['id']) ?>" onclick="return confirm('Êtes-vous sûr de vouloir annuler cette réservation ?');">Annuler</a>
             </td>
         </tr>
         <?php endforeach; ?>
